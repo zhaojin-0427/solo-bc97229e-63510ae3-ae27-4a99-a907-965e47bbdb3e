@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIMS 检测结果同步平台</title>
+<style>
+  :root { --blue:#1f6feb; --green:#2da44e; --red:#cf222e; --gray:#57606a; --bg:#f6f8fa; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin:0; background:var(--bg); color:#1f2328; }
+  header { background:#0a3069; color:#fff; padding:14px 24px; }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { font-size:12px; opacity:.8; margin-top:4px; }
+  main { max-width:1180px; margin:0 auto; padding:18px 16px 60px; }
+  section { background:#fff; border:1px solid #d0d7de; border-radius:8px;
+            padding:16px 18px; margin-bottom:16px; }
+  h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  h2 .tag { font-size:11px; font-weight:normal; color:var(--gray); }
+  button { background:var(--blue); color:#fff; border:0; border-radius:6px;
+           padding:6px 14px; font-size:13px; cursor:pointer; }
+  button:hover { filter:brightness(1.1); }
+  button.ghost { background:#fff; color:var(--blue); border:1px solid var(--blue); }
+  button.sample { background:#fff; color:#1f2328; border:1px solid #d0d7de; margin:2px 4px 2px 0; }
+  button.sample:hover { border-color:var(--blue); color:var(--blue); }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border-bottom:1px solid #e5e9ee; padding:6px 8px; text-align:left; }
+  th { background:#f6f8fa; font-weight:600; }
+  .bar { background:#e5e9ee; border-radius:4px; height:10px; width:140px; overflow:hidden; display:inline-block; vertical-align:middle; }
+  .bar > i { display:block; height:100%; background:var(--green); transition:width .4s; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; }
+  .pill.done { background:#dafbe1; color:#116329; }
+  .pill.loading, .pill.processing, .pill.staging_ready { background:#fff8c5; color:#7d4e00; }
+  .pill.failed { background:#ffebe9; color:#82071e; }
+  .pill.full { background:#ddf4ff; color:#0969da; } .pill.inc { background:#fbefff; color:#8250df; }
+  .stat { display:inline-block; margin-right:22px; font-size:13px; }
+  .stat b { font-size:20px; margin-right:4px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type=file] { font-size:13px; }
+  input[type=text] { padding:5px 8px; border:1px solid #d0d7de; border-radius:6px; font-size:13px; }
+  #toast { position:fixed; top:14px; right:14px; z-index:9; display:none; max-width:420px;
+           padding:10px 14px; border-radius:8px; color:#fff; font-size:13px;
+           box-shadow:0 4px 14px rgba(0,0,0,.2); }
+  .muted { color:var(--gray); font-size:12px; }
+  .withdrawn { color:var(--red); text-decoration:line-through; }
+  code { background:#eff1f3; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LIMS 检测结果同步平台</h1>
+  <div class="sub">全量基线装载 · 增量更正/撤回 · 断点续传 · 原子基线切换 · 报告系统取数接口 <code>GET /api/results</code></div>
+</header>
+<main>
+  <section>
+    <h2>运行状态 <span class="tag">每 1.5 秒自动刷新</span></h2>
+    <div id="status">加载中…</div>
+  </section>
+
+  <section>
+    <h2>① 数据上传</h2>
+    <div class="row" style="margin-bottom:10px">
+      <form id="form-full" class="row">
+        <b>全量 CSV</b>(报告号,检测项目,结果,修订号):
+        <input type="file" name="file" accept=".csv" required>
+        <button type="submit">上传并后台装载</button>
+      </form>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <form id="form-inc" class="row">
+        <b>增量 CSV</b>(报告号,检测项目,动作,结果,修订号):
+        <input type="file" name="file" accept=".csv" required>
+        <button type="submit">上传并立即确认</button>
+      </form>
+    </div>
+    <div class="muted" style="margin-bottom:6px">或使用随附示例(建议演示顺序见 README):</div>
+    <div id="samples">
+      <button class="sample" data-s="full_baseline">全量基线 v1</button>
+      <button class="sample" data-s="inc_corrections">增量·更正</button>
+      <button class="sample" data-s="inc_withdrawals">增量·撤回</button>
+      <button class="sample" data-s="inc_after_withdraw">增量·撤回后更正</button>
+      <button class="sample" data-s="full_large">全量大文件(演示装载中增量)</button>
+      <button class="sample" data-s="inc_during_load">增量·装载中更正/撤回</button>
+      <button class="sample" data-s="full_baseline_v2">全量基线 v2(切换)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>② 导入批次与装载进度</h2>
+    <table id="batches">
+      <thead><tr><th>ID</th><th>类型</th><th>文件</th><th>状态</th><th>进度</th>
+        <th>行数</th><th>已应用</th><th>错误行</th><th>更新时间</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>③ 报告系统取数演示 <span class="tag">GET /api/results —— 每次读取均为切换前或后的完整有效结果</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <button id="btn-results">读取当前有效结果</button>
+      <button id="btn-results-all" class="ghost">含撤回墓碑</button>
+      <input type="text" id="filter-report" placeholder="按报告号过滤,如 R2026-0001">
+      <span class="muted" id="results-count"></span>
+    </div>
+    <table id="results">
+      <thead><tr><th>报告号</th><th>检测项目</th><th>结果</th><th>修订号</th><th class="col-wd">撤回水位</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>④ 已确认增量记录 <span class="tag">崩溃不丢,切换时按序合入新基线</span></h2>
+    <table id="increments">
+      <thead><tr><th>序号</th><th>批次</th><th>报告号</th><th>检测项目</th><th>动作</th>
+        <th>结果</th><th>修订号</th><th>效果</th><th>确认时间</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+function toast(msg, ok=true){
+  const t = $('#toast'); t.textContent = msg;
+  t.style.background = ok ? '#2da44e' : '#cf222e'; t.style.display='block';
+  clearTimeout(t._h); t._h = setTimeout(()=>t.style.display='none', 3500);
+}
+async function j(url, opts){
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(()=>({ok:false,error:'响应解析失败'}));
+  if(!r.ok) throw new Error(data.error || ('HTTP '+r.status));
+  return data;
+}
+const KIND = {full:'全量', inc:'增量'};
+const STATUS = {loading:'装载中', staging_ready:'待切换', processing:'确认中',
+                done:'已完成', failed:'失败'};
+
+async function refreshStatus(){
+  try{
+    const s = await j('/api/status');
+    $('#status').innerHTML =
+      `<span class="stat"><b>${s.active_results}</b>条有效结果</span>` +
+      `<span class="stat"><b>${s.withdrawn_records}</b>条撤回墓碑</span>` +
+      `<span class="stat"><b>${s.confirmed_increments}</b>条已确认增量</span>` +
+      (s.full_load_in_progress
+        ? `<span class="stat" style="color:#7d4e00">⏳ 全量装载进行中(批次 #${s.full_load_in_progress.id},${STATUS[s.full_load_in_progress.status]})</span>`
+        : `<span class="stat" style="color:#2da44e">✓ 无进行中的全量装载</span>`);
+  }catch(e){ $('#status').textContent = '状态获取失败: '+e.message; }
+}
+
+async function refreshBatches(){
+  try{
+    const d = await j('/api/batches');
+    const tb = $('#batches tbody'); tb.innerHTML='';
+    for(const b of d.batches){
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td>${b.id}</td><td><span class="pill ${b.kind}">${KIND[b.kind]}</span></td>` +
+        `<td>${b.orig_name||''}</td>` +
+        `<td><span class="pill ${b.status}">${STATUS[b.status]||b.status}</span>` +
+        (b.error?` <span class="muted" title="${b.error}">⚠</span>`:'') + `</td>` +
+        `<td><span class="bar"><i style="width:${b.progress}%"></i></span> ${b.progress}%</td>` +
+        `<td>${b.total_rows}</td><td>${b.applied_rows}</td>` +
+        `<td>${b.error_rows||''}</td><td class="muted">${b.updated_at}</td>`;
+      if(b.error) tr.title = b.error;
+      tb.appendChild(tr);
+    }
+  }catch(e){}
+}
+
+async function refreshIncrements(){
+  try{
+    const d = await j('/api/increments?limit=30');
+    const tb = $('#increments tbody'); tb.innerHTML='';
+    for(const r of d.increments){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.seq}</td><td>#${r.batch_id}</td><td>${r.report_no}</td>` +
+        `<td>${r.item}</td><td>${r.action==='correct'?'更正':'撤回'}</td>` +
+        `<td>${r.result??''}</td><td>${r.revision}</td><td>${r.effect}</td>` +
+        `<td class="muted">${r.created_at}</td>`;
+      tb.appendChild(tr);
+    }
+  }catch(e){}
+}
+
+async function loadResults(all){
+  const rn = $('#filter-report').value.trim();
+  let url = '/api/results' + (all?'?all=1':'') + (rn?(all?'&':'?')+'report_no='+encodeURIComponent(rn):'');
+  try{
+    const d = await j(url);
+    document.querySelectorAll('.col-wd').forEach(e=>e.style.display = all?'':'none');
+    $('#results-count').textContent = `共 ${d.count} 条`;
+    const tb = $('#results tbody'); tb.innerHTML='';
+    for(const r of d.results){
+      const tr = document.createElement('tr');
+      const wd = all && r.active===false;
+      tr.innerHTML = `<td>${r.report_no}</td><td>${r.item}</td>` +
+        `<td class="${wd?'withdrawn':''}">${wd?'(已撤回)':r.result}</td>` +
+        `<td>${r.revision}</td>` +
+        `<td class="col-wd" style="display:${all?'':'none'}">${r.withdrawn_rev??''}</td>`;
+      tb.appendChild(tr);
+    }
+  }catch(e){ toast(e.message,false); }
+}
+
+async function upload(form, url){
+  const fd = new FormData(form);
+  if(!fd.get('file') || !fd.get('file').name){ toast('请先选择文件',false); return; }
+  try{
+    const d = await j(url, {method:'POST', body:fd});
+    toast(d.message||'成功'); form.reset(); refreshAll();
+  }catch(e){ toast(e.message,false); }
+}
+
+$('#form-full').addEventListener('submit', e=>{e.preventDefault(); upload(e.target,'/upload/full');});
+$('#form-inc').addEventListener('submit', e=>{e.preventDefault(); upload(e.target,'/upload/inc');});
+document.querySelectorAll('#samples button').forEach(b=>b.addEventListener('click', async ()=>{
+  try{ const d = await j('/load_sample/'+b.dataset.s,{method:'POST'}); toast(d.message||'成功'); refreshAll(); }
+  catch(e){ toast(e.message,false); }
+}));
+$('#btn-results').addEventListener('click', ()=>loadResults(false));
+$('#btn-results-all').addEventListener('click', ()=>loadResults(true));
+
+function refreshAll(){ refreshStatus(); refreshBatches(); refreshIncrements(); }
+refreshAll(); loadResults(false);
+setInterval(()=>{ refreshStatus(); refreshBatches(); refreshIncrements(); }, 1500);
+</script>
+</body>
+</html>

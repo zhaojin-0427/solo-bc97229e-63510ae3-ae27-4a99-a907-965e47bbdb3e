@@ -1,0 +1,17 @@
+services:
+  lims:
+    build: .
+    image: lims-results-sync:latest
+    container_name: lims-results-sync
+    ports:
+      - "8000:8000"
+    environment:
+      # 演示参数:每装载块之间的间隔,便于在装载过程中上传增量观察合并行为
+      LIMS_CHUNK_DELAY_MS: "150"
+      LIMS_CHUNK_SIZE: "500"
+    volumes:
+      - lims_data:/data      # SQLite 数据库与上传文件持久化,重启后继续未完成装载
+    restart: unless-stopped
+
+volumes:
+  lims_data:
