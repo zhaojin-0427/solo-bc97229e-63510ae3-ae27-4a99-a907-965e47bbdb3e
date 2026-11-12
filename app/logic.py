@@ -199,6 +199,12 @@ def merge_and_switch(conn, batch_id):
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if batch is None or batch["kind"] != "full":
         raise RuntimeError(f"全量批次不存在: {batch_id}")
+    # 纵深防御:只有仍在装载/待切换的批次才能执行替换。
+    # 正常路径下跨进程 BatchGuard 已保证不会有第二个执行者;此检查确保
+    # 即使绕过锁,已完成的批次也不会再次 DELETE 正式表造成清空。
+    if batch["status"] not in ("loading", "staging_ready"):
+        raise RuntimeError(
+            f"批次 {batch_id} 状态为 {batch['status']},禁止重复基线切换")
     start_seq = batch["start_seq"]
 
     # 1) 旧正式表中的撤回墓碑承继到暂存区:

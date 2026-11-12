@@ -6,11 +6,17 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # 默认两个 Gunicorn worker 进程,共用同一持久数据目录
+      LIMS_WORKERS: "2"
+      LIMS_THREADS: "4"
       # 演示参数:每装载块之间的间隔,便于在装载过程中上传增量观察合并行为
       LIMS_CHUNK_DELAY_MS: "150"
       LIMS_CHUNK_SIZE: "500"
+      # 请求线程等待其他 worker 释放批次锁的最长时间(秒)
+      LIMS_LOCK_TIMEOUT_S: "60"
     volumes:
-      - lims_data:/data      # SQLite 数据库与上传文件持久化,重启后继续未完成装载
+      - lims_data:/data      # SQLite 数据库、上传文件与批次锁持久化;
+                             # 两个 worker 与重启后的进程均从该目录接续
     restart: unless-stopped
 
 volumes:

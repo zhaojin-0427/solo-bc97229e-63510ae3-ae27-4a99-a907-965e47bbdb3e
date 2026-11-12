@@ -6,6 +6,7 @@ import uuid
 from flask import (Blueprint, current_app, jsonify, render_template, request)
 
 from . import db, loader, logic
+from .loader import LockUnavailable
 
 bp = Blueprint("main", __name__)
 
@@ -85,7 +86,7 @@ def _batch_json(row):
 # ------------------------------------------------------------------ 页面
 
 def _poke(app):
-    """唤醒后台装载线程;测试模式下由测试用例手动驱动装载。"""
+    """唤醒本 worker 的常驻监控线程;测试模式下由测试用例手动驱动装载。"""
     if not app.config.get("TESTING"):
         loader.poke_background(app)
 
@@ -121,8 +122,15 @@ def upload_inc():
     path, orig = _save_upload(f)
     batch_id = _create_inc_batch(path, orig)
     try:
-        # 增量在请求内同步确认:响应返回时已立即更新正式表
-        loader.process_inc_batch(db.get_db(), batch_id, current_app.config["CHUNK_SIZE"])
+        # 增量在请求内同步确认:响应返回时已立即更新正式表。
+        # 多 worker 下若另一进程正持有该批次锁,阻塞等待其完成后复查跳过,
+        # 保证同一批次只确认一次;等待超时则让客户端重试。
+        loader.process_inc_batch(
+            current_app.config["DATA_DIR"], batch_id,
+            current_app.config["CHUNK_SIZE"],
+            lock_timeout=current_app.config["LOCK_TIMEOUT"])
+    except LockUnavailable:
+        return _err("该增量批次正由其他 worker 处理,请稍后重试", 503)
     except logic.CsvFormatError as exc:
         loader.mark_failed(current_app.config["DATA_DIR"], batch_id, exc)
         return _err(f"增量文件格式错误: {exc}")
@@ -150,7 +158,12 @@ def load_sample(name):
                         "message": f"示例全量批次 #{batch_id} 已开始后台装载"})
     batch_id = _create_inc_batch(path, orig)
     try:
-        loader.process_inc_batch(db.get_db(), batch_id, current_app.config["CHUNK_SIZE"])
+        loader.process_inc_batch(
+            current_app.config["DATA_DIR"], batch_id,
+            current_app.config["CHUNK_SIZE"],
+            lock_timeout=current_app.config["LOCK_TIMEOUT"])
+    except LockUnavailable:
+        return _err("该增量批次正由其他 worker 处理,请稍后重试", 503)
     except logic.CsvFormatError as exc:
         loader.mark_failed(current_app.config["DATA_DIR"], batch_id, exc)
         return _err(f"增量文件格式错误: {exc}")
@@ -213,4 +226,5 @@ def api_status():
 
 @bp.get("/api/health")
 def api_health():
-    return jsonify({"ok": True})
+    # 连续多次调用可观察到响应来自不同 worker 进程(多 worker 演示)
+    return jsonify({"ok": True, "pid": os.getpid()})

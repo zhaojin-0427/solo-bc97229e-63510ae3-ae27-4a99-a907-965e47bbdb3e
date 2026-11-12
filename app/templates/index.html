@@ -53,7 +53,7 @@
 </header>
 <main>
   <section>
-    <h2>运行状态 <span class="tag">每 1.5 秒自动刷新</span></h2>
+    <h2>运行状态 <span class="tag">每 1.5 秒自动刷新 · 多次刷新可见响应来自不同 worker 进程</span></h2>
     <div id="status">加载中…</div>
   </section>
 
@@ -137,8 +137,9 @@ const STATUS = {loading:'装载中', staging_ready:'待切换', processing:'确�
 
 async function refreshStatus(){
   try{
-    const s = await j('/api/status');
+    const [s, h] = await Promise.all([j('/api/status'), j('/api/health')]);
     $('#status').innerHTML =
+      `<span class="stat" style="color:#0969da">⚙️ 响应 worker PID <b>${h.pid}</b>(多 worker 进程,flock 跨进程协调)</span>` +
       `<span class="stat"><b>${s.active_results}</b>条有效结果</span>` +
       `<span class="stat"><b>${s.withdrawn_records}</b>条撤回墓碑</span>` +
       `<span class="stat"><b>${s.confirmed_increments}</b>条已确认增量</span>` +
